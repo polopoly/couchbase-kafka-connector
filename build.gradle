@@ -75,7 +75,7 @@ ext {
     hadoopVersion = '2.6.0'
     kafkaVersion = '0.8.2.2'
 
-    clientVersion = '2.1.0'
+    clientVersion = '2.2.1-SNAPSHOT'
     junitVersion = '4.11'
 
     gitVersion = getVersionName()
@@ -184,6 +184,10 @@ publishing  {
     repositories {
         maven {
             url "$buildDir/repo"
+        }
+        maven {
+            name "testing"
+            url "http://maven.polopoly.ninja:8081/nexus/content/repositories/polopoly-testing"
         }
     }
 }
