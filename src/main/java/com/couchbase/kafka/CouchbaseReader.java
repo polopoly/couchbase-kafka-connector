@@ -155,9 +155,9 @@ public class CouchbaseReader {
                     @Override
                     public void call(BucketStreamStateUpdatedEvent event) {
                         if (event.partialUpdate()) {
-                            stateSerializer.dump(event.aggregatorState());
-                        } else {
                             stateSerializer.dump(event.aggregatorState(), event.partition());
+                        } else {
+                            stateSerializer.dump(event.aggregatorState());
                         }
                     }
                 });
