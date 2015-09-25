@@ -176,8 +176,8 @@ public class CouchbaseReader {
                                 mostRecentEntry == null ? initialState.vbucketUUID() : mostRecentEntry.vbucketUUID(),
                                 mostRecentEntry == null ? initialState.startSequenceNumber() : mostRecentEntry.sequenceNumber(),
                                 initialState.endSequenceNumber(),
-                                initialState.snapshotStartSequenceNumber(),
-                                initialState.snapshotEndSequenceNumber());
+                                mostRecentEntry == null ? initialState.snapshotStartSequenceNumber() : 0,
+                                mostRecentEntry == null ? initialState.snapshotEndSequenceNumber() : -1);
                         state.set(response.partition(), newState, false);
                         return response.stream();
                     }
