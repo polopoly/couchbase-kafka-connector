@@ -24,6 +24,7 @@ package com.couchbase.kafka;
 
 import com.couchbase.client.core.ClusterFacade;
 import com.couchbase.client.core.CouchbaseCore;
+import com.couchbase.client.core.logging.CouchbaseLogLevel;
 import com.couchbase.client.core.logging.CouchbaseLogger;
 import com.couchbase.client.core.logging.CouchbaseLoggerFactory;
 import com.couchbase.client.deps.com.lmax.disruptor.ExceptionHandler;
@@ -46,6 +47,7 @@ import java.util.List;
 import java.util.Properties;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.logging.Level;
 
 /**
  * {@link CouchbaseKafkaConnector} is an entry point of the library. It sets up connections with both Couchbase and
@@ -137,6 +139,11 @@ public class CouchbaseKafkaConnector implements Runnable {
             Broker broker = brokerIterator.next();
             String brokerAddress = broker.host() + ":" + broker.port();
             brokerList.add(brokerAddress);
+        }
+
+        if (brokerList.isEmpty()) {
+            LOGGER.log(CouchbaseLogLevel.WARN, "No brokers found in ZooKeeper, falling back to localhost:9092");
+            brokerList.add("localhost:9092");
         }
 
         props.put("metadata.broker.list", joinNodes(brokerList));
