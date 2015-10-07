@@ -1,3 +1,6 @@
+# Publish to ninja repository
+$ gradle -PnexusUsername={{USERNAME}} -PnexusPassword={{PASSWORD}} publishCompilePublicationToNinjaRepository
+
 # Couchbase Kafka Connector
 
 Welcome to the official couchbase kafka connector! It provides functionality to direct stream of events from Couchbase
