@@ -75,7 +75,7 @@ ext {
     hadoopVersion = '2.6.0'
     kafkaVersion = '0.8.2.0'
 
-    clientVersion = '2.2.0'
+    clientVersion = '2.2.1'
     junitVersion = '4.11'
 
     gitVersion = getVersionName()
@@ -181,7 +181,7 @@ publishing  {
         }
         maven {
             name "ninja"
-            url "http://maven.polopoly.ninja:8081/nexus/content/repositories/releases"
+            url "http://maven.polopoly.ninja:8081/nexus/content/repositories/polopoly-testing"
             credentials {
                 username project.hasProperty("nexusUsername") ? nexusUsername : null
                 password project.hasProperty("nexusPassword") ? nexusPassword : null
