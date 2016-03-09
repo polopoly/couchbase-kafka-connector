@@ -44,45 +44,53 @@ public class ZookeeperStateSerializer implements StateSerializer {
     private static final Logger LOGGER = LoggerFactory.getLogger(ZookeeperStateSerializer.class);
     private final ZkClient zkClient;
     private final String bucket;
+    private final long stateSerializationThreshold;
+    private long updatedAt = 0;
+    private volatile BucketStreamAggregatorState state = new BucketStreamAggregatorState();
 
     public ZookeeperStateSerializer(final CouchbaseKafkaEnvironment environment) {
         this.zkClient = new ZkClient(environment.kafkaZookeeperAddress(), 4000, 6000, ZKStringSerializer$.MODULE$);
         this.bucket = environment.couchbaseBucket();
+        this.stateSerializationThreshold = environment.couchbaseStateSerializationThreshold();
     }
 
     @Override
-    public void dump(BucketStreamAggregatorState aggregatorState) {
-        for (short partition = 0; partition < aggregatorState.size(); partition++) {
-            dump(aggregatorState, partition);
+    public void dump(final BucketStreamAggregatorState aggregatorState) {
+        for (BucketStreamState streamState : aggregatorState) {
+            dump(aggregatorState, streamState.partition());
         }
     }
 
     @Override
-    public void dump(BucketStreamAggregatorState aggregatorState, short partition) {
-        final BucketStreamState streamState = aggregatorState.get((short) partition);
-        ObjectNode json = MAPPER.createObjectNode();
-        json.put("vbucketUUID", streamState.vbucketUUID());
-        json.put("startSequenceNumber", streamState.startSequenceNumber());
-        json.put("endSequenceNumber", streamState.endSequenceNumber());
-        json.put("snapshotStartSequenceNumber", streamState.snapshotStartSequenceNumber());
-        json.put("snapshotEndSequenceNumber", streamState.snapshotEndSequenceNumber());
-        zkClient.createPersistent(pathForState(partition), true);
-        zkClient.writeData(pathForState(partition), json.toString());
+    public void dump(final BucketStreamAggregatorState aggregatorState, final short partition) {
+        long now = System.currentTimeMillis();
+        if (now - updatedAt > stateSerializationThreshold) {
+            final BucketStreamState streamState = aggregatorState.get(partition);
+            ObjectNode json = MAPPER.createObjectNode();
+            json.put("vbucketUUID", streamState.vbucketUUID());
+            json.put("startSequenceNumber", streamState.startSequenceNumber());
+            json.put("endSequenceNumber", streamState.endSequenceNumber());
+            json.put("snapshotStartSequenceNumber", streamState.snapshotStartSequenceNumber());
+            json.put("snapshotEndSequenceNumber", streamState.snapshotEndSequenceNumber());
+            zkClient.createPersistent(pathForState(partition), true);
+            zkClient.writeData(pathForState(partition), json.toString());
+            updatedAt = now;
+        }
     }
 
     @Override
-    public BucketStreamAggregatorState load(BucketStreamAggregatorState aggregatorState) {
-        for (short partition = 0; partition < aggregatorState.size(); partition++) {
-            BucketStreamState streamState = load(aggregatorState, partition);
-            if (streamState != null) {
-                aggregatorState.put(streamState, false);
+    public BucketStreamAggregatorState load(final BucketStreamAggregatorState aggregatorState) {
+        for (BucketStreamState streamState : aggregatorState) {
+            BucketStreamState newState = load(aggregatorState, streamState.partition());
+            if (newState != null) {
+                aggregatorState.put(newState, false);
             }
         }
         return aggregatorState;
     }
 
     @Override
-    public BucketStreamState load(BucketStreamAggregatorState aggregatorState, short partition) {
+    public BucketStreamState load(final BucketStreamAggregatorState aggregatorState, short partition) {
         String json = zkClient.readData(pathForState(partition), true);
         if (json == null) {
             return null;
@@ -90,7 +98,7 @@ public class ZookeeperStateSerializer implements StateSerializer {
         try {
             JsonNode tree = MAPPER.readTree(json);
             return new BucketStreamState(
-                    (short) partition,
+                    partition,
                     tree.get("vbucketUUID").asLong(0),
                     tree.get("startSequenceNumber").asLong(0),
                     tree.get("endSequenceNumber").asLong(0),
@@ -103,7 +111,7 @@ public class ZookeeperStateSerializer implements StateSerializer {
         }
     }
 
-    private String pathForState(int partition) {
+    private String pathForState(final int partition) {
         return Joiner.on("/").join("/couchbase-kafka-connector", bucket, Integer.toString(partition));
     }
 }

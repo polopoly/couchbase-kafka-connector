@@ -25,9 +25,10 @@ package com.couchbase.kafka;
 import com.couchbase.client.core.ClusterFacade;
 import com.couchbase.client.core.CouchbaseCore;
 import com.couchbase.client.core.dcp.BucketStreamAggregatorState;
-import com.couchbase.client.core.logging.CouchbaseLogLevel;
+import com.couchbase.client.core.dcp.BucketStreamState;
 import com.couchbase.client.core.logging.CouchbaseLogger;
 import com.couchbase.client.core.logging.CouchbaseLoggerFactory;
+import com.couchbase.client.core.message.kv.MutationToken;
 import com.couchbase.client.deps.com.lmax.disruptor.ExceptionHandler;
 import com.couchbase.client.deps.com.lmax.disruptor.RingBuffer;
 import com.couchbase.client.deps.com.lmax.disruptor.dsl.Disruptor;
@@ -54,7 +55,7 @@ import java.util.logging.Level;
 /**
  * {@link CouchbaseKafkaConnector} is an entry point of the library. It sets up connections with both Couchbase and
  * Kafka clusters. And carries all events from Couchbase to Kafka.
- * <p/>
+ *
  * The example below will transfer all mutations from Couchbase bucket "my-bucket" as JSON to Kafka topic "my-topic".
  * <pre>
  * {@code
@@ -87,14 +88,21 @@ public class CouchbaseKafkaConnector implements Runnable {
     private final CouchbaseReader couchbaseReader;
     private final Filter filter;
     private final StateSerializer stateSerializer;
+    private final CouchbaseKafkaEnvironment environment;
 
     /**
      * Create {@link CouchbaseKafkaConnector} with specified settings (list of Couchbase nodes)
      * and custom {@link CouchbaseKafkaEnvironment}.
      *
-     * @param environment custom environment object.
+     * @param couchbaseNodes    address of Couchbase node to override {@link CouchbaseKafkaEnvironment#couchbaseNodes()}.
+     * @param couchbaseBucket   name of Couchbase bucket to override {@link CouchbaseKafkaEnvironment#couchbaseBucket()}.
+     * @param couchbasePassword password for Couchbase bucket to override {@link CouchbaseKafkaEnvironment#couchbasePassword()}.
+     * @param kafkaZookeeper    address of Zookeeper to override {@link CouchbaseKafkaEnvironment#kafkaZookeeperAddress()}.
+     * @param kafkaTopic        name of Kafka topic to override {@link CouchbaseKafkaEnvironment#kafkaTopic()}.
+     * @param environment       custom environment object.
      */
-    private CouchbaseKafkaConnector(final CouchbaseKafkaEnvironment environment) {
+    private CouchbaseKafkaConnector(final List<String> couchbaseNodes, final String couchbaseBucket, final String couchbasePassword,
+                                    final String kafkaZookeeper, final String kafkaTopic, final CouchbaseKafkaEnvironment environment) {
         try {
             filter = (Filter) Class.forName(environment.kafkaFilterClass()).newInstance();
         } catch (ReflectiveOperationException e) {
@@ -109,6 +117,8 @@ public class CouchbaseKafkaConnector implements Runnable {
             throw new IllegalArgumentException("Cannot initialize state serializer class: " +
                     environment.couchbaseStateSerializerClass(), e);
         }
+        this.environment = environment;
+
         core = new CouchbaseCore(environment);
         disruptorExecutor = Executors.newFixedThreadPool(2, new DefaultThreadFactory("cb-kafka", true));
         disruptor = new Disruptor<DCPEvent>(
@@ -119,22 +129,22 @@ public class CouchbaseKafkaConnector implements Runnable {
         disruptor.handleExceptionsWith(new ExceptionHandler() {
             @Override
             public void handleEventException(final Throwable ex, final long sequence, final Object event) {
-                LOGGER.warn("Exception while Handling DCP Events {}, {}", event, ex);
+                LOGGER.warn("Exception while Handling DCP Events {}", event, ex);
             }
 
             @Override
             public void handleOnStartException(final Throwable ex) {
-                LOGGER.warn("Exception while Starting DCP RingBuffer {}", ex);
+                LOGGER.warn("Exception while Starting DCP RingBuffer", ex);
             }
 
             @Override
             public void handleOnShutdownException(final Throwable ex) {
-                LOGGER.info("Exception while shutting down DCP RingBuffer {}", ex);
+                LOGGER.info("Exception while shutting down DCP RingBuffer", ex);
             }
         });
 
         final Properties props = new Properties();
-        ZkClient zkClient = new ZkClient(environment.kafkaZookeeperAddress(), 4000, 6000, ZKStringSerializer$.MODULE$);
+        ZkClient zkClient = new ZkClient(kafkaZookeeper, 4000, 6000, ZKStringSerializer$.MODULE$);
         List<String> brokerList = new ArrayList<String>();
         Iterator<Broker> brokerIterator = ZkUtils.getAllBrokersInCluster(zkClient).iterator();
         while (brokerIterator.hasNext()) {
@@ -154,11 +164,12 @@ public class CouchbaseKafkaConnector implements Runnable {
         final ProducerConfig producerConfig = new ProducerConfig(props);
         producer = new Producer<String, DCPEvent>(producerConfig);
 
-        kafkaWriter = new KafkaWriter(environment, producer, filter);
+        kafkaWriter = new KafkaWriter(kafkaTopic, environment, producer, filter);
         disruptor.handleEventsWith(kafkaWriter);
         disruptor.start();
         dcpRingBuffer = disruptor.getRingBuffer();
-        couchbaseReader = new CouchbaseReader(core, environment, dcpRingBuffer, stateSerializer);
+        couchbaseReader = new CouchbaseReader(couchbaseNodes, couchbaseBucket, couchbasePassword, core,
+                environment, dcpRingBuffer, stateSerializer);
         couchbaseReader.connect();
     }
 
@@ -181,7 +192,24 @@ public class CouchbaseKafkaConnector implements Runnable {
      * @return configured {@link CouchbaseKafkaConnector}
      */
     public static CouchbaseKafkaConnector create(final CouchbaseKafkaEnvironment environment) {
-        return new CouchbaseKafkaConnector(environment);
+        return create(environment.couchbaseNodes(), environment.couchbaseBucket(), environment.couchbasePassword(),
+                environment.kafkaZookeeperAddress(), environment.kafkaTopic(), environment);
+    }
+
+    /**
+     * Create {@link CouchbaseKafkaConnector} with specified settings.
+     *
+     * @param couchbaseNodes    address of Couchbase node to override {@link CouchbaseKafkaEnvironment#couchbaseNodes()}.
+     * @param couchbaseBucket   name of Couchbase bucket to override {@link CouchbaseKafkaEnvironment#couchbaseBucket()}.
+     * @param couchbasePassword password for Couchbase bucket to override {@link CouchbaseKafkaEnvironment#couchbasePassword()}.
+     * @param kafkaZookeeper    address of Zookeeper to override {@link CouchbaseKafkaEnvironment#kafkaZookeeperAddress()}.
+     * @param kafkaTopic        name of Kafka topic to override {@link CouchbaseKafkaEnvironment#kafkaTopic()}.
+     * @param environment       environment object
+     * @return configured {@link CouchbaseKafkaConnector}
+     */
+    public static CouchbaseKafkaConnector create(final List<String> couchbaseNodes, final String couchbaseBucket, final String couchbasePassword,
+                                                 final String kafkaZookeeper, final String kafkaTopic, final CouchbaseKafkaEnvironment environment) {
+        return new CouchbaseKafkaConnector(couchbaseNodes, couchbaseBucket, couchbasePassword, kafkaZookeeper, kafkaTopic, environment);
     }
 
     /**
@@ -208,15 +236,57 @@ public class CouchbaseKafkaConnector implements Runnable {
     }
 
     /**
+     * Returns current sequence numbers for each partition.
+     *
+     * @return the list of the objects representing sequence numbers
+     */
+    public MutationToken[] currentSequenceNumbers() {
+        return couchbaseReader.currentSequenceNumbers();
+    }
+
+    /**
+     * Builds {@link BucketStreamAggregatorState} using current state of the bucket.
+     *
+     * @param direction defines the range which should be defined. The current state
+     *                  of the streams is pivot, Direction.TO_CURRENT will represent
+     *                  all changes happened before current state, and Direction.FROM_CURRENT
+     *                  represents changes that will happen in the future.
+     * @return BucketStreamAggregatorState
+     */
+    public BucketStreamAggregatorState buildState(final Direction direction) {
+        MutationToken[] tokens = currentSequenceNumbers();
+        BucketStreamAggregatorState state = new BucketStreamAggregatorState();
+        for (MutationToken token : tokens) {
+            long start = 0, end = 0;
+            switch (direction) {
+                case TO_CURRENT:
+                    start = 0;
+                    end = token.sequenceNumber();
+                    break;
+                case FROM_CURRENT:
+                    start = token.sequenceNumber();
+                    end = 0xffffffff;
+                    break;
+                case EVERYTHING:
+                    start = 0;
+                    end = 0xffffffff;
+                    break;
+            }
+            state.put(new BucketStreamState((short) token.vbucketID(), token.vbucketUUID(), start, end, start, end));
+        }
+        return state;
+    }
+
+    /**
      * Executes worker reading loop, which relays events from Couchbase to Kafka.
      */
     @Override
     public void run() {
-        couchbaseReader.run();
+        run(RunMode.LOAD_AND_RESUME);
     }
 
     public void run(RunMode mode) {
-        couchbaseReader.run(mode);
+        run(buildState(Direction.EVERYTHING), mode);
     }
 
     public void run(final BucketStreamAggregatorState state, final RunMode mode) {
