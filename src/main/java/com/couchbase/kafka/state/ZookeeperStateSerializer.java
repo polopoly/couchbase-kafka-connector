@@ -112,6 +112,11 @@ public class ZookeeperStateSerializer implements StateSerializer {
     }
 
     private String pathForState(final int partition) {
-        return Paths.get("/couchbase-kafka-connector", bucket, Integer.toString(partition)).toString();
+        StringBuilder builder = new StringBuilder("/couchbase-kafka-connector/");
+        builder.append(bucket);
+        builder.append("/");
+        builder.append(partition);
+        return builder.toString();
     }
 }
+
